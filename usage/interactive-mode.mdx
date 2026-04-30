@@ -1,0 +1,127 @@
+---
+title: "Using KWCode's interactive REPL for coding tasks"
+description: "KWCode's REPL lets you run coding tasks in plain language. Learn plan mode, checkpoint rollback, single-shot execution, and model capability auto-adaptation."
+---
+
+KWCode's primary interface is an interactive REPL (Read-Eval-Print Loop) that lets you describe coding tasks in plain language. The REPL manages the full pipeline — task classification, code location, generation, verification, and debugging — so you can stay focused on what you want to achieve rather than how to achieve it.
+
+## Starting the REPL
+
+Run `kwcode` with no arguments from any directory:
+
+```bash
+kwcode
+```
+
+On first launch, KWCode runs a short onboarding wizard to configure your model connection. After that, you see the header banner with your current model, project directory, and the number of loaded experts. A bottom toolbar shows live context usage, VRAM, and tokens per second while tasks execute.
+
+```text
+  ██╗  ██╗ █████╗ ██╗██╗    ██╗██╗   ██╗
+  ██║ ██╔╝██╔══██╗██║██║    ██║██║   ██║
+  █████╔╝ ███████║██║██║ █╗ ██║██║   ██║
+  ██╔═██╗ ██╔══██║██║██║███╗██║██║   ██║
+  ██║  ██╗██║  ██║██║╚███╔███╔╝╚██████╔╝
+  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝ ╚══╝╚══╝  ╚═════╝
+  天工开物  v1.0.9
+  ──────────────────────────────────────────────
+  qwen3:8b  ·  ~/myproject  ·  15 专家
+
+ >
+```
+
+Type `/help` at the prompt to see all available commands.
+
+## Running tasks
+
+At the `>` prompt, describe your coding task in natural language. KWCode routes the input through the Gate classifier, locates the relevant files using BM25 and AST call graph analysis, generates a targeted patch, and verifies it with syntax checks and pytest — all automatically.
+
+```text
+ > fix the login validation bug in auth.py
+ > write a FastAPI login endpoint with JWT auth
+ > refactor calculate_price into smaller functions
+```
+
+You do not need to specify file paths or function names. KWCode's two-stage locator uses keyword recall and call-graph traversal to find the relevant code before the generator ever runs.
+
+When a task completes, the REPL prints a brief summary: which files were modified, test results if tests ran, and elapsed time. Then the `>` prompt returns immediately.
+
+## Plan mode
+
+Use `/plan` before a task to preview what KWCode intends to do — including each step and a risk level — before any file is touched.
+
+```text
+ > /plan refactor the database connection layer
+```
+
+KWCode displays the planned steps and a risk level (High / Medium / Low) derived from historical `REFLECTION.md` entries. You then confirm or cancel:
+
+```text
+  Steps:
+    1. Locate db_connect and related callers (Low)
+    2. Extract connection pool logic into db_pool.py (Medium)
+    3. Update all import sites (Medium)
+    4. Run pytest (Low)
+
+  Risk: Medium
+
+  确认执行? [y/n] (y):
+```
+
+If you answer `n`, no files are modified. You can also enable plan mode for the next task only by typing `/plan` with no argument:
+
+```text
+ > /plan
+  下一个任务将先显示计划
+ > fix the token expiry bug
+```
+
+## Checkpoint and rollback
+
+Before every task execution, KWCode automatically takes a file snapshot (checkpoint) of all files that will be modified. If a task fails, or if you want to undo a successful change, you can restore from the latest checkpoint.
+
+<Steps>
+  <Step title="List available snapshots">
+    ```bash
+    kwcode checkpoint list
+    ```
+    Output shows snapshot name, creation time, and number of files captured.
+  </Step>
+  <Step title="Restore the latest snapshot">
+    ```bash
+    kwcode checkpoint restore
+    ```
+    All files are reverted to the state captured before the last task ran.
+  </Step>
+</Steps>
+
+Checkpoints are stored locally in `~/.kwcode/` and are never sent anywhere.
+
+## Single-shot mode
+
+If you want to run one task without entering the REPL, pass the task description directly on the command line:
+
+```bash
+kwcode "fix the login validation bug in auth.py"
+```
+
+To preview the plan before execution in single-shot mode, add `--plan`:
+
+```bash
+kwcode --plan "refactor the database connection layer"
+```
+
+Single-shot mode exits with code `0` on success and `1` on failure, making it easy to use in scripts and CI pipelines.
+
+## Model capability auto-adaptation
+
+KWCode detects your model's parameter count at startup and adjusts its behavior automatically. Smaller models get stricter guardrails to reduce error compounding; larger models get more latitude.
+
+| Model size | Plan confirmation | Max files per task | Search trigger |
+|---|---|---|---|
+| \<10B (e.g. qwen3:8b) | Forced before every task | ≤ 2 files | After 1st failure |
+| 10–30B (e.g. qwen3:14b) | Optional | ≤ 4 files | After 2nd failure |
+| \>30B (e.g. qwen3:72b) | Relaxed | ≤ 8 files | Automatic |
+
+<Note>
+You can always switch to a larger model mid-session with `/model <name>` if you need to handle a more complex task. KWCode rebuilds the pipeline automatically.
+</Note>

@@ -1,0 +1,91 @@
+---
+title: "Set up web search augmentation in KWCode"
+description: "KWCode's search augmentation uses DuckDuckGo by default with zero config. Install self-hosted SearXNG via Docker for better results, especially in China."
+---
+
+KWCode can augment code tasks with live web search results — pulling in documentation, package references, error solutions, and research papers before generating a response. By default it uses DuckDuckGo with no setup required. For better coverage in China or in environments where DuckDuckGo is blocked, you can run a self-hosted SearXNG instance with a single command.
+
+## Default: DuckDuckGo
+
+DuckDuckGo search is included in the base `kwcode` install. No configuration is needed.
+
+<CardGroup cols={2}>
+  <Card title="Zero config" icon="circle-check">
+    Works immediately after `pip install kwcode`. No API key, no Docker, no environment variables.
+  </Card>
+  <Card title="Automatic fallback" icon="rotate">
+    Even when SearXNG is configured, KWCode falls back to DuckDuckGo automatically if SearXNG is unreachable.
+  </Card>
+</CardGroup>
+
+## SearXNG self-hosted setup
+
+SearXNG is a privacy-respecting meta-search engine you run locally in Docker. KWCode ships a one-command installer.
+
+**Prerequisites:** Docker Desktop installed and running.
+
+<Steps>
+  <Step title="Run the setup command">
+    ```bash
+    kwcode setup-search
+    ```
+    This pulls the `searxng/searxng` Docker image, starts a container named `kwcode-searxng` on port 8080, and enables the JSON API format that KWCode requires.
+  </Step>
+  <Step title="Verify it is running">
+    KWCode checks SearXNG availability on startup. If it detects the container at `http://localhost:8080`, you will see a confirmation in the session log. No manual configuration is needed.
+  </Step>
+</Steps>
+
+<Note>
+  If SearXNG is stopped between sessions, KWCode attempts to restart the container automatically when you run a search-enabled task. If the restart fails, it falls back to DuckDuckGo silently.
+</Note>
+
+You can also set a custom SearXNG URL via environment variable:
+
+```bash
+export KWCODE_SEARXNG_URL=http://your-searxng-host:8080
+```
+
+Or add `searxng_url` to `~/.kwcode/config.yaml`.
+
+## How search is used
+
+Search is not always active. Gate classifies each task and sets `needs_search=true` only when external information is likely to help — for example, when fixing an unfamiliar library error, or when the task references a package or API.
+
+When search is triggered, KWCode runs the full augmentation pipeline before code generation:
+
+<Steps>
+  <Step title="Intent classification">
+    The query is classified into one of four intent types: `code` (implementation examples), `paper` (research references), `package` (package documentation), or `debug` (error solutions). The search query is rewritten to match the intent.
+  </Step>
+  <Step title="Parallel search">
+    SearXNG and DuckDuckGo run in parallel when both are available. Results are deduplicated by URL and merged, improving recall.
+  </Step>
+  <Step title="PCED-Lite aggregation">
+    Each result page is processed independently to extract a candidate answer. A consistency vote across results selects the most reliable answer.
+  </Step>
+  <Step title="BM25 reranking">
+    Results are reranked with BM25 to surface the most relevant content. If the optional Cross-Encoder is installed, it runs an additional precision pass.
+  </Step>
+  <Step title="Context injection">
+    The top-ranked content is injected into the Generator's context before code generation begins.
+  </Step>
+</Steps>
+
+## Cross-Encoder reranking
+
+For more precise result ranking, install the optional reranking dependency:
+
+```bash
+pip install kwcode[rerank]
+```
+
+This adds `sentence-transformers` and enables a Cross-Encoder model that scores each search result against the query with higher accuracy than BM25 alone. The Cross-Encoder runs locally — no external API calls.
+
+<Tip>
+  Cross-Encoder reranking adds a few hundred milliseconds per search. It is most noticeable on tasks with many results and pays off most on complex debugging or API lookup tasks.
+</Tip>
+
+<Note>
+  For users in China: SearXNG aggregates results from multiple search engines, including ones that are not blocked in China. It avoids the connectivity issues that affect DuckDuckGo directly, and all queries stay on your local machine.
+</Note>

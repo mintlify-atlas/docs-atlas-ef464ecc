@@ -1,0 +1,103 @@
+---
+title: "Run parallel and serial tasks with /multi"
+description: "Use KWCode's /multi command to execute independent tasks in parallel or chain dependent tasks serially using a lightweight DAG scheduler."
+---
+
+The `/multi` command lets you run several coding tasks in a single invocation. Independent tasks execute in parallel using a thread pool; tasks that depend on earlier results execute serially in the correct topological order. KWCode uses a DAG (directed acyclic graph) scheduler to figure out the execution order automatically.
+
+## Parallel tasks
+
+Separate tasks with `;` to run them all at once. KWCode starts every task simultaneously and waits for all of them to finish before reporting results.
+
+```text
+> /multi add docstring to add function ; add docstring to sub function ; add docstring to mul function
+```
+
+Output before execution:
+
+```text
+  多任务计划：3 个任务（3 并行 + 0 串行）
+  t1: add docstring to add function  (并行)
+  t2: add docstring to sub function  (并行)
+  t3: add docstring to mul function  (并行)
+```
+
+Use parallel tasks when the work is independent — functions in different files, unrelated docstrings, isolated test cases.
+
+## Serial tasks
+
+Separate tasks with `->` to create a dependency chain. Each task receives the output context of the task before it, so later tasks can reference what earlier tasks changed.
+
+```text
+> /multi refactor extract_data function -> write tests for the new function
+```
+
+Output before execution:
+
+```text
+  多任务计划：2 个任务（1 并行 + 1 串行）
+  t1: refactor extract_data function  (并行)
+  t2: write tests for the new function  (依赖 t1)
+```
+
+The second task waits for the first to complete successfully. If the first task fails, the second does not run.
+
+## Interactive mixed mode
+
+Type `/multi` with no arguments to enter interactive task entry. Each line you type becomes one task. Press Enter on a blank line to finish and start execution.
+
+Prefix a line with `>` to mark it as depending on all previous parallel tasks (serial after them). Lines without `>` run in parallel with each other.
+
+```text
+> /multi
+  + add docstring to add function
+  + add docstring to sub function
+  + >write tests for the modified code
+```
+
+In the example above, the first two tasks run in parallel. The third task (`>write tests for the modified code`) waits for both of them to complete before running, and receives their combined output context.
+
+```text
+  多任务计划：3 个任务（2 并行 + 1 串行）
+  t1: add docstring to add function  (并行)
+  t2: add docstring to sub function  (并行)
+  t3: write tests for the modified code  (依赖 t1, t2)
+```
+
+## How the DAG scheduler works
+
+KWCode's task scheduler (`kaiwu/core/task_compiler.py`) builds a dependency graph from the task list you provide and executes it in two phases:
+
+1. **Topological sort** — Kahn's algorithm processes the graph and determines which tasks can start immediately (no unresolved dependencies) and which must wait.
+2. **ThreadPoolExecutor** — Tasks whose dependencies are all satisfied are submitted to the thread pool and run concurrently. As each task completes, the scheduler checks whether any waiting tasks are now unblocked and submits them.
+
+Dependency context flows automatically. When a serial task starts, KWCode injects a summary of the preceding task's output — modified files, explanation, and verifier results — into the new task's context window. This means `write tests for the new function` genuinely knows which functions were created or changed by `refactor extract_data function`.
+
+<Note>
+The scheduler is implemented with zero new runtime dependencies: only Python's built-in `concurrent.futures.ThreadPoolExecutor` and a Kahn topological sort written in the KWCode codebase.
+</Note>
+
+## Syntax reference
+
+| Syntax | Execution mode | Example |
+|---|---|---|
+| `/multi t1 ; t2 ; t3` | All parallel | `/multi fix add ; fix sub ; fix mul` |
+| `/multi t1 -> t2 -> t3` | Fully serial chain | `/multi refactor fn -> write tests` |
+| `/multi` then `+ task` lines | Parallel group | `+ add docstring to add` |
+| `/multi` then `+ >task` line | Serial after previous parallel tasks | `+ >write tests for modified code` |
+
+## When to use parallel vs serial
+
+Use **parallel** (`;`) when:
+- Tasks touch different files or functions
+- Tasks are independent by nature (e.g. adding docstrings to unrelated functions)
+- You want maximum throughput and have no ordering requirements
+
+Use **serial** (`->` or `>`) when:
+- A later task depends on the output of an earlier one
+- You are refactoring first and then writing tests for the refactored code
+- The second task needs to know what the first task changed
+
+<Tip>
+Keep task counts within the limits for your model size. Models under 10B work best with 2–3 tasks per `/multi` invocation; 10–30B models handle up to 4 tasks well; models above 30B can manage 6–8 tasks reliably. Exceeding these limits increases the chance of context overflow inside individual tasks.
+</Tip>

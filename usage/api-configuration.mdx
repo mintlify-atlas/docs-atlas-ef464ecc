@@ -1,0 +1,134 @@
+---
+title: "Connect KWCode to a local or cloud model API"
+description: "Configure KWCode to use Ollama, DeepSeek, Qwen DashScope, or any OpenAI-compatible endpoint. Switch with /api commands and persist your config permanently."
+---
+
+KWCode works with any API that is compatible with the OpenAI chat completions format. This includes local inference servers like Ollama, cloud providers like DeepSeek and Qwen (Alibaba DashScope), and aggregators like Silicon Flow and Groq. You configure the connection once, and KWCode stores it in `~/.kwcode/` for all future sessions.
+
+## Local models with Ollama
+
+Ollama is the recommended way to run models locally. It exposes an OpenAI-compatible API at `http://localhost:11434/v1`.
+
+<Steps>
+  <Step title="Install and start Ollama">
+    Download Ollama from [ollama.com](https://ollama.com) and start the server. On most platforms it runs as a background service after installation.
+  </Step>
+  <Step title="Pull a model">
+    ```bash
+    ollama pull qwen3:8b
+    ```
+    See the [quick-start guide](/quickstart) for VRAM requirements and model recommendations.
+  </Step>
+  <Step title="Connect KWCode to Ollama">
+    Inside the KWCode REPL, run:
+    ```text
+    > /api default http://localhost:11434/v1 ollama
+    ```
+    The key value `ollama` is accepted as a placeholder — Ollama does not require a real API key.
+  </Step>
+</Steps>
+
+After running `/api default`, KWCode verifies the connection and rebuilds the pipeline. Future sessions start with this endpoint automatically.
+
+## Cloud APIs
+
+KWCode works with any provider that speaks the OpenAI API format. Replace the URL and key below with your own.
+
+<Tabs>
+  <Tab title="DeepSeek">
+    ```text
+    > /api default https://api.deepseek.com your-deepseek-api-key
+    ```
+    Then switch to a DeepSeek model:
+    ```text
+    > /model deepseek-coder
+    ```
+  </Tab>
+  <Tab title="Qwen (DashScope)">
+    ```text
+    > /api default https://dashscope.aliyuncs.com/compatible-mode/v1 your-dashscope-api-key
+    ```
+    Then switch to a Qwen model:
+    ```text
+    > /model qwen-coder-turbo
+    ```
+  </Tab>
+  <Tab title="Silicon Flow">
+    ```text
+    > /api default https://api.siliconflow.cn/v1 your-siliconflow-api-key
+    ```
+  </Tab>
+  <Tab title="Groq">
+    ```text
+    > /api default https://api.groq.com/openai/v1 your-groq-api-key
+    ```
+  </Tab>
+</Tabs>
+
+## API commands
+
+The `/api` command has three subcommands:
+
+| Command | Effect | Persisted? |
+|---|---|---|
+| `/api temp <url> <key>` | Switch to the new endpoint for the current session only | No |
+| `/api default <url> <key>` | Switch and save as the permanent default | Yes, to `~/.kwcode/config.yaml` |
+| `/api show` | Print the current base URL, model, and masked API key | — |
+
+Example — inspect current configuration:
+
+```text
+> /api show
+  Base URL : https://api.deepseek.com
+  Model    : deepseek-coder
+  API Key  : ********...
+```
+
+Example — temporarily use a different endpoint for this session only:
+
+```text
+> /api temp http://localhost:11434/v1 ollama
+  ✓ 已切换到 http://localhost:11434/v1
+  临时切换，当前窗口有效
+```
+
+## Switching models mid-session
+
+Use `/model` to change the active model without restarting KWCode. The pipeline is rebuilt immediately.
+
+```text
+> /model qwen3:14b
+  模型切换为: qwen3:14b
+  重建流水线...
+```
+
+The new model is also persisted to config, so the next session starts with it. To revert, switch back explicitly:
+
+```text
+> /model qwen3:8b
+```
+
+## Model recommendations by task complexity
+
+| VRAM | Recommended model | Best for |
+|---|---|---|
+| 4 GB | gemma3:4b | Simple bug fixes, docstrings |
+| 8 GB | qwen3:8b | Most everyday coding tasks |
+| 16 GB | qwen3:14b | Refactoring, test generation, multi-file changes |
+| 24 GB+ | qwen3:30b-a3b | Complex architecture changes, cross-file refactoring |
+
+<Note>
+Cloud APIs (DeepSeek, Qwen) do not require local VRAM. They are a good option if your machine cannot run a large enough model locally.
+</Note>
+
+## Configuration storage
+
+All API configuration is stored in `~/.kwcode/config.yaml`. KWCode reads this file at startup and applies the `default` profile automatically.
+
+The config directory also contains:
+- `kwcode.log` — debug log for the most recent session
+- `last_stats_shown.txt` — timestamp for the weekly stats hint
+
+<Warning>
+Never commit `~/.kwcode/config.yaml` or any file containing your API key to version control. The file lives outside your project directory by design, but be careful if you copy or sync your home directory.
+</Warning>

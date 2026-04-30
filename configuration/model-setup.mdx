@@ -1,0 +1,112 @@
+---
+title: "Connect KWCode to local and cloud models"
+description: "KWCode works with any OpenAI-compatible API. Connect to Ollama locally or point it at DeepSeek, Qwen, or Silicon Flow with one /api command."
+---
+
+KWCode speaks the OpenAI chat completions API, so it works with any compatible provider. You can run a local model with Ollama and point KWCode at it, or use a cloud API — DeepSeek, Qwen, Silicon Flow, and others — without any local GPU. Configuration is stored in `~/.kwcode/` and persists across sessions.
+
+## Local models with Ollama
+
+<Steps>
+  <Step title="Install Ollama">
+    Download and install Ollama from [ollama.com](https://ollama.com). It runs as a background service on `http://localhost:11434`.
+  </Step>
+  <Step title="Pull a model">
+    ```bash
+    ollama pull qwen3:8b
+    ```
+    See the VRAM table below to choose the right model for your hardware.
+  </Step>
+  <Step title="Start KWCode">
+    ```bash
+    kwcode
+    ```
+    KWCode connects to Ollama at `http://localhost:11434` by default. No further configuration is needed for local models.
+  </Step>
+  <Step title="Switch models mid-session (optional)">
+    ```text
+    /model qwen3:14b
+    ```
+    The new model takes effect immediately for the next task.
+  </Step>
+</Steps>
+
+## Cloud APIs
+
+To use a cloud API, run `/api` with your endpoint and key. The `default` keyword saves the configuration permanently.
+
+<Tabs>
+  <Tab title="DeepSeek">
+    ```text
+    /api default https://api.deepseek.com your-api-key
+    ```
+    Recommended model: `deepseek-chat` or `deepseek-coder`.
+  </Tab>
+  <Tab title="Qwen (DashScope)">
+    ```text
+    /api default https://dashscope.aliyuncs.com/compatible-mode/v1 your-api-key
+    ```
+    Recommended model: `qwen-coder-plus` or `qwen-max`.
+  </Tab>
+  <Tab title="Silicon Flow">
+    ```text
+    /api default https://api.siliconflow.cn/v1 your-api-key
+    ```
+    Silicon Flow hosts Qwen3, DeepSeek, and other open-source models.
+  </Tab>
+</Tabs>
+
+To switch temporarily for a single session without saving:
+
+```text
+/api temp https://api.deepseek.com your-api-key
+```
+
+To check your current API configuration:
+
+```text
+/api show
+```
+
+## VRAM and model recommendations
+
+| VRAM | Recommended model | Notes |
+|------|-------------------|-------|
+| 4 GB | `gemma3:4b` | Minimum viable; best for simple, single-file tasks |
+| 8 GB | `qwen3:8b` | Good general-purpose balance |
+| 16 GB | `qwen3:14b` | Handles multi-file tasks comfortably |
+| 24 GB+ | `qwen3:30b-a3b` | MoE architecture; strong reasoning at lower VRAM than dense 30B |
+
+<Note>
+  No GPU? Use a cloud API (DeepSeek, Qwen, Silicon Flow) instead. KWCode works identically with remote endpoints.
+</Note>
+
+## Model capability auto-adaptation
+
+KWCode detects your model's parameter count automatically — first by querying the Ollama API, then by parsing the model name. Based on the detected tier, it adjusts task scope, planning behavior, and retry strategy:
+
+| Model size | Example models | Plan mode | Max files per task | Search trigger |
+|------------|----------------|-----------|-------------------|----------------|
+| < 10B | `qwen3:8b`, `gemma3:4b` | Forced on | 2 files | After 1st failure |
+| 10 – 30B | `qwen3:14b`, `qwen3:30b-a3b` | Optional | 4 files | After 2nd failure |
+| > 30B | `qwen3:72b`, `deepseek-r1:70b` | Optional | 8 files | After 2nd failure |
+
+These constraints are not optional hints — they are hard limits applied by the pipeline to prevent small models from being overwhelmed by scope they cannot handle reliably.
+
+<Tip>
+  If you are using a cloud model whose name does not contain a parameter count (e.g., `deepseek-chat`), KWCode defaults to the MEDIUM tier. You can verify the detected tier by checking the session startup log.
+</Tip>
+
+## Switching models
+
+Use `/model` at any time inside the REPL to switch:
+
+```text
+/model qwen3:14b
+```
+
+The change takes effect for the next task. KWCode re-detects the capability tier and adjusts its strategy accordingly.
+
+## Configuration storage
+
+All API configuration is stored in `~/.kwcode/config.yaml`. You can inspect or edit this file directly if needed.

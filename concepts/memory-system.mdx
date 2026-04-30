@@ -1,0 +1,129 @@
+---
+title: "KWCode memory layers and context compression"
+description: "KWCode maintains four persistent memory files per project and compresses context algorithmically in under 10ms when the model's window approaches its limit."
+---
+
+KWCode accumulates knowledge about your project across sessions without sending any data off your machine. Four markdown files in `.kaiwu/` record project structure, expert call history, task patterns, and past failures. Different pipeline stages read different files — the Gate only sees a brief project summary, while the Locator reads structural rules it has built up over time. Context compression runs inline when needed, keeping the model's window from overflowing on long sessions with a local model.
+
+<Tip>
+Run `/memory` in the REPL to inspect all four memory files for the current project directory.
+</Tip>
+
+## Memory files
+
+All files are stored in `{project_root}/.kaiwu/`. They are plain markdown and can be read or edited manually, though most fields are maintained automatically.
+
+<AccordionGroup>
+  <Accordion title="PROJECT.md — project overview">
+    Created by `/init` or auto-initialized on the first successful task. Records static project facts that are unlikely to change: language, framework, package manager, test command, entry point, and code style.
+
+    Two sections are updated automatically as tasks complete:
+
+    - **已知结构规律** (known structural patterns): file paths and function names surfaced by the Locator, accumulated over successful tasks. Capped at 30 lines.
+    - **注意事项** (notes): test pass/fail counts and short error excerpts from the Verifier. Capped at 20 lines.
+
+    Different pipeline stages receive different slices of PROJECT.md to stay within token limits:
+
+    | Stage | Section injected | Character limit |
+    |-------|-----------------|-----------------|
+    | Gate | 基础信息 (basic info) | 500 chars |
+    | Locator | 已知结构规律 (structure) | 750 chars |
+    | Verifier | 注意事项 (notes) | 250 chars |
+
+    ```markdown
+    ## 基础信息
+    - 语言：Python
+    - 框架：FastAPI
+    - 包管理：pip
+    - 测试命令：pytest
+    - 主入口：app.py
+    - 代码风格：Ruff
+    ```
+  </Accordion>
+
+  <Accordion title="EXPERT.md — accumulated expert knowledge">
+    Appended after every successful task (Verifier pass). Records a timestamped log of which expert ran, which pipeline sequence was used, which files were touched, and how long the task took. The last 20 records are injected as context.
+
+    ```markdown
+    | 时间 | 专家 | 任务类型 | 涉及文件 | 流水线 | 耗时 |
+    |------|------|---------|---------|--------|------|
+    | 2026-04-30 09:15 | Locator→Generator→Verifier | locator_repair | auth/jwt.py | ... | 12.4s |
+    ```
+
+    The file is capped at 100 records. EXPERT.md is only written on success — failed tasks do not contribute.
+  </Accordion>
+
+  <Accordion title="PATTERN.md — flywheel pattern statistics">
+    Updated after **every** task, success or failure. Tracks per-expert-type counts, success rates, average latency, and the last trigger timestamp. The flywheel's `PatternDetector` reads this file to identify candidates for new expert generation.
+
+    The markdown table is rebuilt from a JSON sidecar (`.pattern_stats.json`) after each update, so the file is always consistent:
+
+    ```markdown
+    ## 模式统计
+    | 任务类型 | 次数 | 成功率 | 平均耗时 | 最近触发 |
+    |---------|------|--------|---------|---------|
+    | locator_repair | 12 | 92% | 14.2s | 2026-04-30 09:15 |
+    | codegen | 5 | 100% | 8.7s | 2026-04-30 08:40 |
+
+    ## 候选专家触发
+    - codegen: 5次全部成功，平均8.7s
+    ```
+
+    The **候选专家触发** section is populated automatically when any expert type reaches 5 successful runs, signalling that the flywheel's Gate 1 condition has been met.
+  </Accordion>
+
+  <Accordion title="REFLECTION.md — structured failure log">
+    Written by `save_reflection` in `kaiwu/memory/pattern_md.py` after every task. Structured by expert type with separate sections for failure patterns and general notes:
+
+    ```markdown
+    ## bugfix 失败模式
+    - [2026-04-29] JWT验证失败 → 根因：token过期时间单位错误
+
+    ## codegen 注意事项
+    - [2026-04-29] FastAPI路由 → 注意：必须include_router
+    ```
+
+    Each section is capped at 20 entries to prevent unbounded growth. The most recent 5 entries from the relevant sections are surfaced as risk warnings when you run `/plan`. See [The KWCode self-improving flywheel](/concepts/flywheel) for details on how Reflexion persistence integrates with the three-gate system.
+  </Accordion>
+</AccordionGroup>
+
+## Context compression
+
+KWCode's context window management is fully algorithmic — no LLM is involved, and there is no round-trip latency. Compression runs in under 10ms and triggers automatically when the accumulated conversation history approaches the model's context limit.
+
+The algorithm uses a head/tail + middle keyword extraction strategy:
+
+1. **Head preserved** — the first N tokens of conversation history are kept verbatim. This retains the original task framing and any early system instructions.
+2. **Tail preserved** — the most recent N tokens are kept verbatim. This retains the current working context and the last tool outputs.
+3. **Middle compressed** — for the conversation turns between head and tail, keyword extraction retains sentences that contain high-information tokens (function names, file paths, error messages, identifiers). Pure boilerplate and repeated scaffolding is dropped.
+
+This approach is derived from the Context Condensation technique in OpenHands V1. The implementation lives in `kaiwu/core/` and runs synchronously on the CPU — no GPU or model call required.
+
+<Warning>
+If you are using a model with a very small context window (under 8K tokens), you may notice that some mid-session detail is lost after compression. For tasks that require referencing earlier conversation turns explicitly, consider starting a fresh session or using `/plan` to checkpoint the important context before compression occurs.
+</Warning>
+
+## SESSION.md
+
+When you exit the REPL (Ctrl+D or `/exit`), KWCode writes a session summary to `.kaiwu/SESSION.md`. On the next startup, this file is automatically loaded and injected into the first Gate call as `memory_context`.
+
+```markdown
+## 会话 2026-04-30 09:20 (3 个任务)
+- [OK] Fix login validation bug → auth/jwt.py (12s)
+- [OK] Add FastAPI /health endpoint → app.py (8s)
+- [FAIL] Refactor database connection layer
+```
+
+The file is capped at 50 lines. Newer sessions are prepended so the most recent context is read first. SESSION.md gives the model continuity across REPL restarts without manual re-prompting.
+
+## Inspecting memory state
+
+```text
+/memory
+```
+
+Displays the current content of all three main memory files — PROJECT.md, EXPERT.md, and PATTERN.md — separated by clear headers. REFLECTION.md is stored in the same `.kaiwu/` directory and can be opened directly.
+
+<Tip>
+Run `/init` in a new project to pre-populate PROJECT.md with auto-detected language, framework, package manager, and test command. This gives the Gate accurate context from the first task instead of waiting for it to accumulate.
+</Tip>

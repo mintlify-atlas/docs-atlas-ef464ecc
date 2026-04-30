@@ -1,0 +1,157 @@
+---
+title: "KWCode REPL and CLI complete command reference"
+description: "All KWCode REPL slash commands (/plan, /multi, /model, /api, /experts, /memory, /init, /cd) and CLI subcommands with flags and default values."
+---
+
+KWCode exposes its features through two interfaces: slash commands typed inside the interactive REPL, and subcommands passed directly to the `kwcode` binary. This page lists every command, its syntax, and what it does.
+
+## REPL slash commands
+
+These commands are available at the `>` prompt inside the REPL. Type `/help` at any time to see a condensed list.
+
+| Command | Syntax | Description |
+|---|---|---|
+| `/plan` | `/plan <task>` or `/plan` | Show steps and risk level before executing. With a task argument, runs plan mode immediately. With no argument, applies plan mode to the next task only. |
+| `/multi` | `/multi [tasks]` | Multi-task mode. Accepts tasks separated by `;` (parallel), `->` (serial chain), or interactive line-by-line entry. See [Run parallel and serial tasks](/usage/multi-task). |
+| `/model` | `/model <name>` | Switch the active model mid-session. Rebuilds the full pipeline. Changes are persisted to config for future sessions. Example: `/model qwen3:14b` |
+| `/api` | `/api temp \| default \| show` | Configure the API endpoint and key. See [Connect KWCode to a model API](/usage/api-configuration). |
+| `/experts` | `/experts` | List all registered experts with their lifecycle stage, task count, success rate, and trigger keywords. |
+| `/memory` | `/memory` | Display the current project's `KAIWU.md` memory file in a panel. |
+| `/init` | `/init` | Generate a `KWCODE.md` project rules template and initialize `KAIWU.md` in the current project directory. |
+| `/cd` | `/cd <path>` | Switch the active project directory. KWCode rebuilds the pipeline with the new root. |
+| `/help` | `/help` | Print all slash commands with short descriptions. |
+| `/exit` | `/exit` or `/quit` or `/q` | Exit the REPL. |
+
+<Note>
+After `/model` or `/cd`, KWCode automatically rebuilds the internal pipeline so the new model or project root takes effect immediately — no restart needed.
+</Note>
+
+## CLI subcommands
+
+These are top-level commands passed to the `kwcode` binary, outside the REPL.
+
+<AccordionGroup>
+  <Accordion title="kwcode (no arguments) — enter the REPL">
+    Starts the interactive REPL. On first run, triggers the onboarding wizard to configure your model endpoint.
+
+    ```bash
+    kwcode
+    ```
+  </Accordion>
+
+  <Accordion title='kwcode "task" — single-shot execution'>
+    Runs one task and exits. Returns exit code `0` on success, `1` on failure.
+
+    ```bash
+    kwcode "fix the login validation bug in auth.py"
+    ```
+  </Accordion>
+
+  <Accordion title='kwcode --plan "task" — single-shot with plan preview'>
+    Runs one task in plan mode: shows steps and risk level, asks for confirmation, then executes.
+
+    ```bash
+    kwcode --plan "refactor the database connection layer"
+    ```
+  </Accordion>
+
+  <Accordion title="kwcode init — initialize project rule files">
+    Creates a `KWCODE.md` template and initializes `KAIWU.md` in the current (or specified) project directory.
+
+    ```bash
+    kwcode init
+    kwcode init --project /path/to/project
+    ```
+  </Accordion>
+
+  <Accordion title="kwcode memory — view project memory">
+    Prints the project's `KAIWU.md` memory file. Pass `--reset` to clear it.
+
+    ```bash
+    kwcode memory
+    kwcode memory --reset
+    ```
+  </Accordion>
+
+  <Accordion title="kwcode stats — view task statistics">
+    Shows a value report for the past 30 days: tasks completed, time saved, and most active expert. Requires at least 5 completed tasks before displaying.
+
+    ```bash
+    kwcode stats
+    kwcode stats --days 7
+    ```
+  </Accordion>
+
+  <Accordion title="kwcode setup-search — install SearXNG via Docker">
+    Installs and starts a local SearXNG search engine container. Requires Docker Desktop to be running. Once installed, KWCode detects it automatically at startup and uses it instead of DuckDuckGo.
+
+    ```bash
+    kwcode setup-search
+    ```
+  </Accordion>
+
+  <Accordion title="kwcode checkpoint list / restore — manage file snapshots">
+    KWCode takes a file snapshot before every task. These commands let you inspect and restore snapshots.
+
+    ```bash
+    kwcode checkpoint list
+    kwcode checkpoint restore
+    ```
+  </Accordion>
+
+  <Accordion title="kwcode status — show system status">
+    Displays the current model, Ollama connectivity, expert count, and whether project memory is initialized.
+
+    ```bash
+    kwcode status
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Global CLI flags
+
+These flags work with the main `kwcode` command (REPL and single-shot modes):
+
+| Flag | Default | Description |
+| Flag | Default | Description |
+|---|---|---|
+| `--model`, `-m` | `qwen3-8b` | Ollama model name to use |
+| `--model-path` | — | Path to a local GGUF model file (alternative to Ollama) |
+| `--ollama-url` | `http://localhost:11434` | Ollama server address |
+| `--project`, `-d` | `.` | Project root directory |
+| `--plan`, `-p` | `false` | Enable plan mode for single-shot execution |
+| `--verbose`, `-v` | `false` | Print detailed pipeline stage output |
+| `--no-search` | `false` | Disable search augmentation |
+| `--init` | `false` | Initialize KWCODE.md + KAIWU.md and exit |
+| `--memory` | `false` | Print project memory and exit |
+
+<Tip>
+Configuration set via `/api default` or `/model` inside the REPL is written to `~/.kwcode/config.yaml` and becomes the default for future sessions. CLI flags always override saved config.
+</Tip>
+
+## Expert management subcommands
+
+The `kwcode expert` subcommand group lets you inspect, export, and manage domain experts.
+
+| Subcommand | Description |
+|---|---|
+| `kwcode expert list [builtin\|custom]` | List all registered experts. Pass `builtin` or `custom` to filter by type. |
+| `kwcode expert info <name>` | Show details for a named expert: lifecycle stage, trigger keywords, success rate. |
+| `kwcode expert export <name> [-o dir]` | Export an expert to a `.kwx` package file. |
+| `kwcode expert install <path-or-url>` | Install an expert from a `.kwx` file or URL. |
+| `kwcode expert remove <name>` | Remove a custom expert. Built-in experts cannot be removed. |
+| `kwcode expert create <name>` | Scaffold a new expert directory with a starter `SKILL.md`. |
+
+```bash
+# List all experts
+kwcode expert list
+
+# Show details for the BugFix expert
+kwcode expert info bugfix
+
+# Export an expert to share it
+kwcode expert export my-vue3-expert -o ./exports/
+
+# Install an expert from a file
+kwcode expert install ./exports/my-vue3-expert.kwx
+```

@@ -1,0 +1,144 @@
+---
+title: "How KWCode's self-improving flywheel works"
+description: "KWCode silently watches your task history and automatically promotes repeated successes into new domain experts through a three-gate validation process."
+---
+
+Every time you complete a task, KWCode records the full trajectory — which expert ran, which pipeline stages fired, which files changed, and whether the Verifier passed. Nothing is sent to a server. Over time, these local records accumulate into a dataset that the flywheel uses to detect patterns, validate candidate experts, and promote them to production. The result is an agent that becomes more accurate on your specific codebase and task types the more you use it.
+
+<Note>
+The flywheel is grounded in two published mechanisms: experience extraction from task trajectories (EE-MCP, NeurIPS 2025) and self-improving coding agents (SICA, arXiv:2504.15228). Reflexion-style failure persistence (Shinn et al., NeurIPS 2023) is implemented separately via `REFLECTION.md`.
+</Note>
+
+## How trajectories are collected
+
+After every task — success or failure — `TrajectoryCollector` writes a JSON file to `~/.kaiwu/trajectories/{task_id}.json`. Each trajectory captures:
+
+```json
+{
+  "task_id": "...",
+  "user_input": "Fix login validation bug",
+  "gate_result": {
+    "expert_type": "locator_repair",
+    "expert_name": "BugFix",
+    "task_summary": "...",
+    "difficulty": "easy"
+  },
+  "expert_used": "locator_repair",
+  "pipeline_steps": ["locator", "generator", "verifier"],
+  "files_modified": ["auth/jwt.py"],
+  "success": true,
+  "retry_count": 1,
+  "latency_s": 12.4,
+  "model_used": "qwen3:8b",
+  "timestamp": "2026-04-30T09:15:00+00:00",
+  "search_triggered": false,
+  "project_hash": "a3f92b1c"
+}
+```
+
+The `project_hash` field is a 16-character SHA-256 prefix of the project root path, which scopes flywheel candidates to the current project.
+
+## The three quality gates
+
+A candidate expert must pass all three gates before it is registered and used in production. The gates run in sequence — a failure at any gate stops promotion.
+
+<Steps>
+  <Step title="Gate 1 — Pattern detection (≥5 successes)">
+    `PatternDetector` scans the most recent 500 trajectories and groups them by `expert_used`. A candidate is identified when:
+
+    - The same `expert_type` has appeared **5 or more times**
+    - **All** occurrences were successful (`success: true`)
+    - All successful trajectories share the same **pipeline sequence**
+
+    If trajectories for a type have mixed pipeline sequences, the detector groups them by pipeline and applies the threshold to each sub-group separately.
+
+    A progress notification is queued when a type reaches 3 or 4 successes, so you can see accumulation in real time.
+
+    ```python
+    # pattern_detector.py
+    MIN_PATTERN_COUNT = 5
+    ```
+  </Step>
+
+  <Step title="Gate 2 — Backtest (new expert ≥ original pipeline)">
+    When a pattern is detected, a new expert YAML is generated from the source trajectories and submitted to `ABTester.submit_candidate`.
+
+    Gate 2 replays each source trajectory's original task input through the **new expert's pipeline** using the live `PipelineOrchestrator`. The new expert's success rate must be **greater than or equal to** the baseline success rate measured from the source trajectories.
+
+    ```python
+    # ab_tester.py — Gate 2 pass condition
+    if backtest_sr < baseline_sr:
+        # Gate 2 FAILED — save as failed candidate for diagnostics
+        candidate["status"] = "gate2_failed"
+        return
+    ```
+
+    If Gate 2 passes, the candidate enters the AB testing pool with `status: "ab_testing"`.
+  </Step>
+
+  <Step title="Gate 3 — AB test (10 comparisons, >10% improvement)">
+    Over the next 10 same-type tasks in production, the orchestrator alternates between the candidate expert (odd-numbered tasks) and the original pipeline (even-numbered tasks). After 10 results:
+
+    - **New expert success rate must exceed baseline by more than 10 percentage points.**
+    - Pass → the expert is registered with `lifecycle: new` and saved to disk.
+    - Fail → the candidate is archived.
+
+    ```python
+    # ab_tester.py — Gate 3 pass condition
+    if new_sr > baseline_sr + 0.10:
+        expert_def["lifecycle"] = "new"
+        self.registry.register(expert_def)
+        self.registry.save_to_disk(expert_def["name"])
+        candidate["status"] = "graduated"
+    ```
+
+    A flywheel notification is displayed in the REPL when an expert graduates.
+  </Step>
+</Steps>
+
+## Prompt Optimizer
+
+After Gate 3 passes, KWCode can optionally refine the new expert's `system_prompt` using the Anthropic API.
+
+<Info>
+The Prompt Optimizer is disabled unless you configure an Anthropic API key. KWCode is fully functional without it — the optimizer is an optional quality enhancement, not a required step.
+</Info>
+
+To enable it, add your key to the default profile:
+
+```text
+/api default https://api.deepseek.com your-deepseek-key
+```
+
+Then add your Anthropic key to `~/.kwcode/config.yaml` under the `default` profile:
+
+```yaml
+default:
+  base_url: https://api.deepseek.com
+  api_key: your-deepseek-key
+  anthropic_api_key: sk-ant-...
+```
+
+When enabled, the optimizer (`kaiwu/flywheel/prompt_optimizer.py`) analyzes the success trajectories for the graduated expert, extracts recurring patterns and domain rules, and appends them to the expert's YAML `system_prompt`. On the next task of that type, the Generator receives more accurate domain knowledge.
+
+## Reflexion persistence
+
+Failures are not discarded. After every task — regardless of outcome — KWCode calls `save_reflection` in `kaiwu/memory/pattern_md.py`, which appends a structured entry to `.kaiwu/REFLECTION.md`.
+
+The format separates failure patterns from general notes by expert type:
+
+```markdown
+## bugfix 失败模式
+- [2026-04-29] JWT验证失败 → 根因：token过期时间单位错误
+
+## codegen 注意事项
+- [2026-04-29] FastAPI路由 → 注意：必须include_router
+```
+
+When you run `/plan <task>`, KWCode reads the relevant sections of `REFLECTION.md` and surfaces them as risk warnings before execution. The sections matched are `{expert_type} 失败模式`, `{expert_type} 注意事项`, and `{expert_type} 风险点`. The most recent 5 entries per section are shown.
+
+Each section is capped at 20 entries. Older entries are trimmed automatically so the file does not grow unbounded.
+
+<Note>
+Reflexion persistence is based on Shinn et al., "Reflexion: Language Agents with Verbal Reinforcement Learning" (NeurIPS 2023). KWCode implements the failure-storage-and-injection loop in pure Python, with no additional model calls for the persistence step itself.
+</Note>

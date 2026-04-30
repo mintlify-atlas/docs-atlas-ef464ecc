@@ -1,81 +1,146 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
-icon: 'rocket'
+title: "Get started with KWCode and run your first task"
+description: "Install KWCode, connect it to a local or cloud model, point it at your project, and run your first coding task through the expert pipeline."
 ---
 
-## Get started in three steps
+This guide walks you from a fresh install to running your first coding task. The whole process takes about five minutes if you already have a local model running (e.g., Ollama with `qwen3:8b`) or a cloud API key.
 
-Get your documentation site running locally and make your first customization.
+## Steps
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Install KWCode">
+    Install KWCode from PyPI:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    pip install kwcode
+    ```
 
-### Step 2: Deploy your changes
+    If you are in China or seeing slow speeds, use the Tsinghua mirror:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    pip install kwcode -i https://pypi.tuna.tsinghua.edu.cn/simple
+    ```
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Launch the REPL">
+    Start the interactive session:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    kwcode
+    ```
 
-### Step 3: Go live
+    On first launch, KWCode runs a brief onboarding flow. It detects your network environment, asks for your API base URL, API key (leave blank for local models), and model name, then verifies the connection before saving to `~/.kwcode/config.yaml`. You cannot skip this step — the configuration must be saved before the REPL opens.
+  </Step>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+  <Step title="Connect to a model">
+    During onboarding you enter your connection details. You can also update them at any time inside the REPL with the `/api` command:
+
+    ```
+    # Connect to a local Ollama instance (no API key needed)
+    > /api default http://localhost:11434
+
+    # Connect to DeepSeek cloud API
+    > /api default https://api.deepseek.com your-api-key
+
+    # View current configuration
+    > /api show
+    ```
+
+    Use `/api temp` instead of `/api default` for a temporary switch that does not persist across sessions. Switch models separately with `/model <name>` (e.g. `/model qwen3:8b`).
+  </Step>
+
+  <Step title="Navigate to your project">
+    Point KWCode at your codebase, then initialize a project rules file:
+
+    ```
+    > /cd /path/to/your/project
+    > /init
+    ```
+
+    `/init` creates a `KWCODE.md` file in your project root. This file is where you define project-specific conventions — test framework, naming rules, which files to avoid, and so on. KWCode loads it on startup and injects the relevant sections based on the current task type.
+  </Step>
+
+  <Step title="Run your first task">
+    Type a task description in plain text and press Enter:
+
+    ```
+    > fix the login validation bug in auth.py
+    ```
+
+    KWCode classifies the task, locates the relevant code, generates a patch, runs `pytest`, and reports back. If verification fails, the Debug Subagent captures runtime variable values and retries with that data.
+  </Step>
+</Steps>
+
+## What happens when you run a task
+
+Every task goes through the same fixed pipeline. Here is what each stage does:
+
+```
+Your input: "fix the login validation bug"
+│
+├─► Gate
+│     Classifies the task type (bugfix / codegen / refactor / chat / etc.)
+│     Matches domain knowledge from the expert registry
+│     Routes to the correct pipeline path
+│
+├─► Locator
+│     BM25 keyword retrieval — finds candidate files without calling the LLM
+│     AST call graph expansion — traces hidden dependencies along the call chain
+│     Returns a ranked list of relevant files and functions
+│
+├─► Generator
+│     Reads the original file content
+│     LLM generates only the modified sections (not a full rewrite)
+│     Injects domain knowledge from matching SKILL.md files
+│
+├─► Verifier
+│     Applies the generated patch
+│     Runs syntax check + pytest automatically
+│     On success: done. On failure: triggers retry with Debugger.
+│
+└─► Debugger (on failure)
+      LLM decides which line to instrument and which variables to inspect
+      sys.settrace captures real variable values non-invasively
+      Runtime data is injected into the next Generator retry
+      Up to 3 retry rounds with reflection between each attempt
+```
+
+The Reviewer runs after a successful patch to confirm the change actually addresses what was requested.
+
+## Example tasks
+
+These are realistic examples you can try directly in the REPL after pointing KWCode at a project:
+
+```
+# Bug fix
+> fix the KeyError when user has no profile set
+
+# Code generation
+> add a FastAPI endpoint POST /users/{id}/reset-password with JWT auth
+
+# Refactoring
+> split the calculate_price function into smaller functions
+
+# Multi-task parallel execution
+> /multi add docstrings to add_user ; add docstrings to remove_user ; add docstrings to update_user
+
+# Multi-task with dependency chain
+> /multi refactor extract_data function -> write tests for the refactored function
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Command reference" icon="terminal" href="/usage/commands">
+    Full list of REPL commands: `/plan`, `/multi`, `/model`, `/memory`, `/experts`, `/cd`, and more.
+  </Card>
+  <Card title="Expert pipeline" icon="diagram-project" href="/concepts/expert-pipeline">
+    Deep dive into how Gate → Locator → Generator → Verifier → Debugger → Reviewer works and why this architecture handles small models better than ReAct loops.
+  </Card>
+  <Card title="KWCODE.md configuration" icon="file-code" href="/configuration/kwcode-md">
+    Learn how to write project rules that KWCode injects per task type, and how section tags like `[bugfix]` and `[codegen]` work.
+  </Card>
+  <Card title="Multi-task DAG" icon="sitemap" href="/usage/multi-task">
+    Run parallel and serial task chains, define dependency graphs with `->` syntax, and pass upstream results to downstream tasks automatically.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

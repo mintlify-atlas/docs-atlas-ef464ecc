@@ -1,0 +1,149 @@
+---
+title: "Add new domain experts to KWCode with SKILL.md"
+description: "KWCode domain knowledge lives in SKILL.md files. Create a directory, write the frontmatter, and your expert loads automatically — no Python needed."
+---
+
+KWCode's domain knowledge lives in SKILL.md files under `kaiwu/builtin_experts/`. Adding a new expert means creating a directory with a `SKILL.md` — no Python code changes needed. The registry scans that directory on startup and injects the expert's rules into Gate (Level 1 context) and Generator (Level 2 detail).
+
+## How domain experts work
+
+Each expert is a subdirectory of `kaiwu/builtin_experts/` containing a single `SKILL.md` file (and optionally a `scripts/` subdirectory). The loader reads the file in two passes:
+
+<CardGroup cols={2}>
+  <Card title="Level 1 — metadata" icon="filter">
+    YAML frontmatter only. Loaded at startup for every expert. Gate uses `trigger_keywords` and `trigger_min_confidence` to route the task in milliseconds, with no LLM call.
+  </Card>
+  <Card title="Level 2 — instructions" icon="book-open">
+    The Markdown body below the frontmatter. Injected into Generator's context only after Gate selects this expert, keeping the LLM context tight.
+  </Card>
+</CardGroup>
+
+<Note>
+  SKILL.md experts take priority over legacy YAML experts when both define the same `name`. The loader loads SKILL.md directories first and overwrites any YAML entry with the same name.
+</Note>
+
+## Create a new expert
+
+<Steps>
+  <Step title="Create the expert directory">
+    Add a subdirectory under `kaiwu/builtin_experts/`. The directory name is used only for organisation — the registry key is the `name` field in the frontmatter.
+
+    ```bash
+    mkdir kaiwu/builtin_experts/vue3
+    ```
+  </Step>
+
+  <Step title="Create SKILL.md with frontmatter">
+    Create a `SKILL.md` file in the new directory. The YAML frontmatter block (delimited by `---`) must include the four required fields: `name`, `trigger_keywords`, `trigger_min_confidence`, and `pipeline`.
+
+    ```bash
+    touch kaiwu/builtin_experts/vue3/SKILL.md
+    ```
+  </Step>
+
+  <Step title="Write the SKILL.md content">
+    Model your file after an existing expert. Here is a realistic Vue3 expert based on the FastAPI and BugFix expert structure:
+
+    ```markdown
+    ---
+    name: Vue3Expert
+    version: 1.0.0
+    trigger_keywords: [vue3, vue, composition api, pinia, vite, defineComponent, ref, reactive, setup, vuerouter]
+    trigger_min_confidence: 0.5
+    pipeline: [locator, generator, verifier]
+    lifecycle: new
+    ---
+
+    ## 领域知识
+
+    你是Vue3专家。
+
+    ### 核心能力
+    - Composition API（setup、ref、reactive、computed、watch）
+    - Pinia 状态管理和模块化 store
+    - Vue Router 4 路由守卫和动态路由
+    - Vite 构建配置和环境变量处理
+
+    ### 常见问题模式
+    - 响应式丢失：从 reactive 对象解构后 ref 丢失响应性，用 toRefs() 包裹
+    - setup 里访问 this：Composition API 无 this，用 getCurrentInstance() 或直接用 inject
+    - Pinia store 未注册：确认 app.use(createPinia()) 在 main.ts 里已调用
+
+    ### 生成策略
+    - 组件用 <script setup> 语法，不用 Options API
+    - Props 用 defineProps<T>() 泛型形式，不用运行时声明
+    - 异步数据用 onMounted + async，不在 setup 顶层 await
+
+    ## 经验规则（自动生成）
+    ```
+
+    The `## 经验规则（自动生成）` section at the bottom is the append target for the flywheel's Prompt Optimizer. Leave it present but empty.
+  </Step>
+
+  <Step title="Verify the expert loaded">
+    The registry calls `load_builtin()` automatically on every startup. Start KWCode and run the `/experts` command to confirm your expert appears in the list:
+
+    ```bash
+    kwcode
+    # inside the REPL:
+    /experts
+    ```
+
+    You should see `Vue3Expert` in the output with its `trigger_keywords` and `lifecycle` status.
+  </Step>
+</Steps>
+
+<Tip>
+  Run `/experts` immediately after starting KWCode to verify your new expert loaded correctly. If it is missing, check that the frontmatter block is delimited by `---` on its own line and that all four required fields are present.
+</Tip>
+
+## Expert frontmatter fields
+
+These fields are parsed from the YAML block at the top of every `SKILL.md`. The four marked as required will cause the loader to reject the file if they are absent.
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `name` | Yes | string | Registry key. Use PascalCase with `Expert` suffix, e.g. `Vue3Expert`. |
+| `trigger_keywords` | Yes | list of strings | Keyword list matched against user input (case-insensitive). Confidence is computed as `1 - 0.5^matched_count`. |
+| `trigger_min_confidence` | Yes | float (0, 1] | Minimum confidence to activate this expert. `0.5` = 1 keyword match sufficient; `0.95` = needs multiple matches. |
+| `pipeline` | Yes | list of strings | Ordered pipeline steps to run. Valid values: `locator`, `generator`, `verifier`, `office`, `chat`. |
+| `version` | No | string | Semver string. Defaults to `1.0.0`. |
+| `lifecycle` | No | string | One of `new`, `mature`, `declining`, `archived`. Defaults to `new`. Affects the confidence threshold (see below). |
+
+**Lifecycle threshold adjustments:**
+
+| Lifecycle | Threshold delta | Effect |
+|---|---|---|
+| `new` | +0.1 | Harder to trigger — observation period |
+| `mature` | 0.0 | Normal threshold |
+| `declining` | +0.2 | Much harder to trigger |
+| `archived` | — | Skipped entirely |
+
+## In-demand experts
+
+The following domain experts are listed in the README as high-priority contributions. Each only requires a new directory and `SKILL.md`:
+
+<CardGroup cols={2}>
+  <Card title="Frontend">
+    Vue3 · React · Next.js
+  </Card>
+  <Card title="Backend frameworks">
+    Django · Go Gin · Rust Actix
+  </Card>
+  <Card title="Infrastructure">
+    K8s · Docker
+  </Card>
+  <Card title="Databases">
+    Redis · MySQL
+  </Card>
+</CardGroup>
+
+## What NOT to change
+
+<Warning>
+  The following interfaces are considered stable and frozen. Changing them breaks the pipeline for all existing experts.
+
+  - **The 5 meta-expert interfaces and pipeline order** — Gate → Locator → Generator → Verifier → Debugger → Reviewer is the fixed execution graph. Do not add, remove, or reorder steps.
+  - **Gate's JSON output format** — Gate emits a structured JSON object that the orchestrator parses deterministically. Changes break routing.
+  - **SKILL.md frontmatter field definitions** — Adding new fields to the frontmatter schema requires updating `REQUIRED_FIELDS_SKILL` in `expert_loader.py` and is a breaking change for all existing experts.
+</Warning>

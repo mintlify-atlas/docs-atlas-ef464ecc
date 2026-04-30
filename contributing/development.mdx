@@ -1,0 +1,138 @@
+---
+title: "Set up KWCode for local development"
+description: "KWCode is MIT-licensed and welcomes contributions. This page covers cloning the repo, installing dev dependencies, running the 311-test suite, and the recommended fork-based contribution workflow."
+---
+
+KWCode is MIT-licensed and welcomes contributions. The codebase is a pure-Python package with no compiled extensions required for the core pipeline — `tree-sitter` and `rank-bm25` are the heaviest dependencies. This page covers setting up a local dev environment, running the test suite, and the recommended workflow for submitting changes.
+
+## Clone and install
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/val1813/kwcode.git
+    cd kwcode
+    ```
+  </Step>
+
+  <Step title="Install in editable mode with dev extras">
+    The `[dev]` extra pulls in `pytest` and the `[full]` group (which includes `llama-cpp-python` for local model support).
+
+    ```bash
+    pip install -e ".[dev]"
+    ```
+  </Step>
+</Steps>
+
+## Run the test suite
+
+The full test suite lives under `kaiwu/tests/`. The `bench_tasks` subdirectory contains long-running integration benchmarks and is excluded from the standard run.
+
+```bash
+python -m pytest kaiwu/tests/ -v --ignore=kaiwu/tests/bench_tasks
+# 311 tests should pass
+```
+
+<Note>
+  All 311 tests must pass before submitting a PR. If you add new functionality, add corresponding tests in `kaiwu/tests/` alongside your change.
+</Note>
+
+## Project structure
+
+The entire package lives under the `kaiwu/` directory:
+
+```
+kaiwu/
+├── cli/
+│   └── main.py              # CLI entry point, REPL loop, /multi command
+├── core/
+│   ├── gate.py              # LLM task classification and expert routing
+│   ├── orchestrator.py      # Deterministic pipeline orchestration
+│   ├── task_compiler.py     # DAG multi-task scheduler (ThreadPoolExecutor + Kahn sort)
+│   ├── planner.py           # /plan mode with risk assessment
+│   ├── checkpoint.py        # File snapshot and rollback
+│   └── model_capability.py  # Model-size adaptive strategy
+├── experts/
+│   ├── locator.py           # [meta-expert] BM25 + call-graph file location
+│   ├── generator.py         # [meta-expert] Code generation (minimal diff only)
+│   ├── verifier.py          # [meta-expert] Syntax check + pytest
+│   ├── debug_subagent.py    # [meta-expert] Runtime debugging (sys.settrace)
+│   ├── reviewer.py          # [meta-expert] Intent-vs-change alignment review
+│   └── search_augmentor.py  # Search augmentation, BM25 + CE reranking
+├── search/
+│   ├── reranker.py          # Cross-Encoder optional reranking
+│   ├── duckduckgo.py        # SearXNG + DuckDuckGo parallel search
+│   └── intent_classifier.py # Intent-aware query classification
+├── flywheel/
+│   ├── trajectory_collector.py  # Task trajectory recording
+│   ├── pattern_detector.py      # Pattern detection (Gate 1)
+│   ├── ab_tester.py             # Three-gate validation (backtest + AB)
+│   └── prompt_optimizer.py      # SKILL.md auto-optimization
+├── memory/
+│   └── pattern_md.py        # PATTERN.md + REFLECTION.md management
+├── builtin_experts/         # 15 SKILL.md domain knowledge directories
+├── registry/                # Expert registry: loads and matches SKILL.md
+├── ast_engine/              # tree-sitter AST parser + call graph (SQLite)
+└── stats/                   # Value dashboard (SQLite)
+```
+
+<Accordion title="Entry point">
+  The `kwcode` CLI command maps to `kaiwu.cli.main:app` (defined in `pyproject.toml`). `main.py` owns the REPL loop and all `/command` handlers. The pipeline itself is invoked through `core/orchestrator.py`.
+</Accordion>
+
+## Contribution areas
+
+<CardGroup cols={2}>
+  <Card title="New domain experts" icon="file">
+    Create a `SKILL.md` directory under `kaiwu/builtin_experts/`. No Python changes required. This is the easiest and most impactful contribution — see [Add domain experts](/contributing/adding-experts).
+  </Card>
+  <Card title="Multi-language AST support" icon="code">
+    `ast_engine/` currently handles Python via `tree-sitter-python`. Adding JavaScript, TypeScript, Java, or Go requires new tree-sitter grammar bindings and call-graph extraction logic.
+  </Card>
+  <Card title="bench_tasks additions" icon="flask">
+    Add new benchmark scenarios under `kaiwu/tests/bench_tasks/`. Bugfix scenarios and cross-file dependency cases are most needed for measuring locator accuracy.
+  </Card>
+  <Card title="Deterministic scripts" icon="terminal">
+    Add scripts to `scripts/` that run outside the LLM context. These are deterministic helpers (linters, formatters, validators) invoked by experts via the `scripts/` subdirectory mechanism.
+  </Card>
+</CardGroup>
+
+**Flywheel quality validation** is also open: the `ab_tester.py` three-gate system (backtest gate → AB test gate → production gate) can be made stricter or extended with new validation strategies.
+
+## What NOT to modify
+
+<Warning>
+  The following interfaces are considered stable and must not be changed without a coordinated update across the entire codebase:
+
+  - **The 5 meta-expert interfaces and pipeline order** — `gate → locator → generator → verifier → debugger → reviewer` is the fixed execution graph. Adding, removing, or reordering steps breaks every existing task flow.
+  - **Gate's JSON output format** — `core/gate.py` emits a structured JSON object consumed deterministically by the orchestrator. Any schema change is a breaking change.
+  - **SKILL.md frontmatter field definitions** — `REQUIRED_FIELDS_SKILL` in `kaiwu/registry/expert_loader.py` defines the contract. Changing field names invalidates all 15 existing experts.
+</Warning>
+
+## Recommended contribution workflow
+
+<Note>
+  KWCode is a project by Chinese developers and forks are explicitly encouraged. You do not need to open a PR — using your own fork directly is a valid and welcomed workflow.
+</Note>
+
+<Steps>
+  <Step title="Fork the repository">
+    Fork `val1813/kwcode` on GitHub. Work on your fork so you can use and test your changes independently before deciding whether to submit upstream.
+  </Step>
+
+  <Step title="Make your changes">
+    Keep changes focused. New SKILL.md experts can be added without touching any Python. For Python changes, keep them isolated to the relevant module.
+  </Step>
+
+  <Step title="Run tests">
+    ```bash
+    python -m pytest kaiwu/tests/ --ignore=kaiwu/tests/bench_tasks
+    ```
+
+    All 311 tests must pass. Add new tests for any new Python logic.
+  </Step>
+
+  <Step title="Open a PR or use your fork">
+    Submit a pull request to `val1813/kwcode`, or continue using your fork. Both are valid — the project README explicitly supports the fork-and-self-host workflow.
+  </Step>
+</Steps>

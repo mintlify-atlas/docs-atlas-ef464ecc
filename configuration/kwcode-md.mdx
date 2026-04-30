@@ -1,0 +1,107 @@
+---
+title: "Project rules with KWCODE.md — configure KWCode"
+description: "KWCODE.md is a project-rules file that KWCode loads on startup, injecting the right rules into each task based on type — bugfix, codegen, refactor, and more."
+---
+
+KWCODE.md is a Markdown file you place in your project root. KWCode reads it on startup and injects the relevant rule sections into the Generator's context window depending on the task type Gate classifies. Rules in `[all]` always apply; rules in `[bugfix]`, `[codegen]`, and other sections apply only to matching tasks.
+
+## Create KWCODE.md
+
+Run the init command from inside your project directory:
+
+```bash
+kwcode init
+```
+
+Or, if you are already inside the REPL:
+
+```text
+> /init
+```
+
+KWCode auto-detects your test framework (pytest, npm test, go test, cargo test) and writes a starter file at `KWCODE.md` in the current directory.
+
+The generated file looks like this:
+
+```markdown
+# KWCODE.md
+# Project rules file, auto-loaded by KWCode on startup
+
+## [all] General rules
+- Run tests: pytest tests/ -v
+- Add your project conventions here, e.g.:
+- Auth logic is in: src/auth/
+- Database layer is in: src/db/
+
+## [bugfix] Bug fix rules
+- Understand the error cause before fixing
+
+## [codegen] Code generation rules
+- Add new code conventions here
+
+## [test] Test rules
+- Use pytest
+
+## [refactor] Refactor rules
+- One refactor type at a time
+```
+
+## Rule sections
+
+Each section begins with a `## [tag]` heading. KWCode supports the following section tags:
+
+| Tag | When it is injected |
+|-----|---------------------|
+| `[all]` | Every task, always |
+| `[bugfix]` | Bug fix and repair tasks |
+| `[codegen]` | Code generation tasks |
+| `[test]` | Test generation tasks |
+| `[refactor]` | Refactoring tasks |
+| `[doc]` | Documentation tasks |
+| `[office]` | Excel / PPT / Word generation |
+
+You can include any or all sections. Sections you omit are simply ignored.
+
+## Example KWCODE.md
+
+Here is a realistic KWCODE.md for a Python web project:
+
+```markdown
+## [all] General rules
+- Test framework: pytest
+- Run tests: pytest tests/ -v
+
+## [bugfix] Bug fix rules
+- Understand the error cause before fixing
+- Don't modify test code
+
+## [codegen] Code generation rules
+- Variable names use snake_case
+- Must write docstrings
+```
+
+## How rules are injected
+
+<Steps>
+  <Step title="Gate classifies the task">
+    When you submit a task, Gate (the routing expert) classifies it into a type: `bugfix`, `codegen`, `refactor`, etc.
+  </Step>
+  <Step title="Matching sections are selected">
+    KWCode selects the `[all]` section plus the section matching the task type.
+  </Step>
+  <Step title="Rules are prepended to Generator context">
+    The combined rule text is prepended to the Generator's system prompt before code generation begins.
+  </Step>
+</Steps>
+
+<Tip>
+  Keep rules concise. All injected rule text must fit within roughly 15% of the model's context window (approximately 1,200 tokens for an 8K window). Rules beyond that limit are truncated automatically.
+</Tip>
+
+<Note>
+  KWCODE.md works alongside KWCode's other memory files. PROJECT.md stores project-level architecture notes, EXPERT.md holds accumulated expert knowledge, and PATTERN.md records successful task patterns. Each file serves a different layer of the memory system.
+</Note>
+
+## Fallback location
+
+If KWCode does not find `KWCODE.md` in the current project root, it checks `~/.kwcode/KWCODE.md` as a global fallback. Rules defined there apply to all projects on your machine.

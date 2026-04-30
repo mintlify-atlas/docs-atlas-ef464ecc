@@ -1,0 +1,60 @@
+---
+title: "KWCode: offline coding agent for small open-source LLMs"
+description: "KWCode is a CLI coding agent for local models (8B–30B). A deterministic 5-expert pipeline lets small LLMs handle real coding tasks fully offline."
+---
+
+KWCode is a local coding agent built specifically for small open-source language models. Existing coding agents like Claude Code and Cursor are designed around powerful cloud LLMs — they rely on the model's own reasoning to call tools, make decisions, and validate results. Local models (8B–30B) can't do this reliably: context windows fill up fast, mistakes repeat themselves, and tool calling is inconsistent. KWCode takes a different approach: **the LLM only classifies and generates, while a deterministic pipeline handles all decisions and validation.** Each expert has a fixed, narrow input/output contract, so an 8B model only ever needs to do one clearly scoped thing at a time.
+
+## How it works
+
+KWCode runs every coding task through a fixed sequence of five experts. Each step is deterministic except for the LLM calls inside Gate and Generator, which are constrained to a small, well-defined output format.
+
+```
+User input
+  └─► Gate        Classify task type and match domain knowledge (millisecond routing)
+        └─► Locator     Locate relevant files and functions (BM25 + AST call graph, no LLM)
+              └─► Generator  Generate only the changed code sections + inject domain knowledge
+                    └─► Verifier   Run syntax check + pytest automatically
+                          └─► Debugger   On failure: capture runtime variable values via sys.settrace
+                                └─► Reviewer   Compare intent vs. actual change (LLM alignment check)
+```
+
+The pipeline is fixed — it does not change based on the task. What changes is the domain knowledge injected at each step. KWCode ships with 15 built-in domain knowledge files (SKILL.md) covering BugFix, FastAPI, TestGen, DeepSeek API, MyBatis, SpringBoot, SQL optimization, TypeHint, UniApp, Office generation, and more. These are loaded progressively at runtime and never alter the pipeline structure.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Expert pipeline" icon="diagram-project" href="/concepts/expert-pipeline">
+    A deterministic 5-expert sequence (Gate → Locator → Generator → Verifier → Debugger → Reviewer) where the LLM only generates code — all decisions are made by deterministic code.
+  </Card>
+  <Card title="BM25 + AST location" icon="magnifying-glass" href="/concepts/code-location">
+    Two-stage code location finds the right files and call-graph dependencies without asking the LLM to guess. Based on CodeCompass, achieving 99.4% accuracy on hidden-dependency tasks.
+  </Card>
+  <Card title="Debug subagent" icon="bug" href="/concepts/debug-subagent">
+    When verification fails, a Debug Subagent uses `sys.settrace` to non-invasively capture real variable values at the failing line and inject actual runtime data into the next retry.
+  </Card>
+  <Card title="Self-improving flywheel" icon="arrows-rotate" href="/concepts/flywheel">
+    Every task is recorded. Successful patterns are promoted to new domain experts after passing three quality gates: pattern detection (≥5 successes), backtest, and a 10-run AB test requiring >10% improvement.
+  </Card>
+  <Card title="Fully offline" icon="lock" href="/configuration/model-setup">
+    Your code never leaves your machine. Models run locally via Ollama or llama.cpp, search runs on self-hosted SearXNG (with DuckDuckGo fallback), and all statistics are stored in local SQLite.
+  </Card>
+  <Card title="Multi-task DAG" icon="sitemap" href="/usage/multi-task">
+    Run parallel and serial task chains with `/multi`. A lightweight DAG scheduler (ThreadPoolExecutor + Kahn topological sort) executes independent tasks in parallel and passes upstream results downstream automatically.
+  </Card>
+</CardGroup>
+
+## Supported models
+
+KWCode works with any OpenAI-compatible API. For local inference, recommended models by VRAM:
+
+| VRAM | Recommended model |
+|------|-------------------|
+| 4 GB | gemma3:4b |
+| 8 GB | qwen3:8b |
+| 16 GB | qwen3:14b |
+| 24 GB+ | qwen3:30b-a3b |
+
+<Note>
+  Cloud APIs also work without any local GPU. KWCode supports any OpenAI-compatible endpoint, including DeepSeek, Qwen cloud, Silicon Flow, Zero-One, and Groq. Connect with `/api default https://api.deepseek.com your-api-key`.
+</Note>

@@ -1,0 +1,126 @@
+---
+title: "BM25 and AST call-graph code location in KWCode"
+description: "KWCode's two-stage Locator uses BM25 keyword recall and AST call-graph expansion to find the right files and functions without any LLM call."
+---
+
+Small models cannot reliably guess which files are relevant from a file tree listing. Given a 200-file project and the task "fix the JWT expiry bug", a 8B model will frequently pick the wrong file — and once the wrong file is in context, the Generator modifies the wrong code, the Verifier fails, and all three retry attempts are wasted. The problem is not generation quality; it is grounding.
+
+KWCode's Locator solves this with a two-stage algorithm that never calls the LLM on the primary path. Stage 1 is BM25 keyword recall (milliseconds, no GPU). Stage 2 is AST call graph expansion along actual call chains. Together they achieve 99.4% accuracy on G3 (graph-dependent) tasks — versus 76.2% for BM25 alone — as documented in the CodeCompass paper (arXiv:2602.20048).
+
+## Two-stage location
+
+### Stage 1 — BM25 keyword recall
+
+BM25 (specifically `BM25Okapi` from the `rank-bm25` library) indexes every function and class node in the codebase. Each node's index entry (`search_text`) combines the function name, qualified name, file path components, and path tokens:
+
+```python
+# graph_builder.py — how search_text is built
+path_parts = rel_path.replace("/", " ").replace(".", " ").replace("_", " ")
+short_name = name.split(".")[-1] if "." in name else name
+search_text = f"{name} {short_name} {rel_path} {path_parts}"
+```
+
+At query time, the user's task description is tokenized and scored against all nodes. The top 20 candidates are selected in under a few milliseconds. No LLM is involved.
+
+### Stage 2 — AST call graph expansion
+
+BM25 only finds nodes whose names appear in the query. It misses hidden dependencies — functions that are called by the relevant function but have different names. Stage 2 fixes this.
+
+The Locator expands 2 hops in both directions along the call graph:
+
+```python
+# graph_retriever.py — bidirectional expansion
+# Downstream: who does frontier call
+to_nodes = conn.execute(
+    "SELECT to_id FROM edges WHERE from_id IN (...) AND project_root=?", ...
+)
+# Upstream: who calls frontier
+from_nodes = conn.execute(
+    "SELECT from_id FROM edges WHERE to_id IN (...) AND project_root=?", ...
+)
+new_nodes = (to_nodes | from_nodes) - discovered
+```
+
+This traversal runs on a local SQLite database (`~/.kwcode/graph.db`). No LLM call, no network, no GPU.
+
+## How the AST call graph works
+
+The call graph is built by `GraphBuilder` using `tree-sitter` to parse source files. For each file, the parser extracts:
+
+- **Nodes** — every `function_definition` (with class prefix if inside a class), stored with `file_path`, `start_line`, `end_line`, and `search_text`
+- **Edges** — every function call (`call` node in the tree-sitter AST), linking `caller_id → callee_id`
+
+The graph is persisted to SQLite with three tables: `nodes`, `edges`, and `graph_meta`. The schema uses a `project_root` column so multiple projects share one database file.
+
+```python
+# graph_builder.py — SQLite schema (simplified)
+CREATE TABLE nodes (
+    id INTEGER PRIMARY KEY,
+    name TEXT,              -- "MyClass.my_method" or "my_function"
+    file_path TEXT,         -- relative to project_root
+    start_line INTEGER,
+    end_line INTEGER,
+    search_text TEXT,       -- BM25 index text
+    task_count INTEGER,     -- flywheel stats
+    success_count INTEGER,
+    project_root TEXT
+);
+
+CREATE TABLE edges (
+    from_id INTEGER REFERENCES nodes(id),
+    to_id   INTEGER REFERENCES nodes(id),
+    edge_type TEXT,         -- "CALLS"
+    project_root TEXT
+);
+```
+
+The graph is rebuilt when the Git HEAD commit changes (`needs_rebuild()` check). If a stale graph exists, it is used immediately while a background thread rebuilds. Incremental updates happen after every task: modified files are re-parsed and their nodes/edges replaced in-place.
+
+## Accuracy
+
+The two-stage approach is validated by the CodeCompass paper (arXiv:2602.20048, 2026):
+
+| Method | G3 task accuracy |
+|--------|-----------------|
+| BM25 alone | 76.2% |
+| BM25 + call graph | **99.4%** |
+
+G3 tasks are "graph-dependent" — cases where the relevant code cannot be found from the query alone, because the fix must go into a function that is called by the function mentioned in the bug report.
+
+<Info>
+The CodeCompass paper (arXiv:2602.20048) introduced the concept of graph-traversal-based code location for agentic coding. KGCompass (arXiv:2503.21710) extended this approach to achieve 58.3% on SWE-bench Lite. KWCode's Locator directly implements the CodeCompass two-stage algorithm.
+</Info>
+
+## Supported languages
+
+| Language | AST parsing | Call graph | Notes |
+|----------|-------------|------------|-------|
+| Python | Full (tree-sitter-python) | Full | Production-ready |
+| JavaScript / TypeScript | Partial (tree-sitter) | Partial | Community contribution welcome |
+| Java, Go, Rust | Not yet | Not yet | See `SUPPORTED_EXTENSIONS` in `graph_builder.py` |
+
+For unsupported languages, the Locator falls back to an LLM-based file-tree guess + regex symbol extraction. Accuracy is lower but the pipeline still functions.
+
+## Code example
+
+Given the task: `"Fix login validation failure — JWT token always expired"`:
+
+```python
+# Stage 1: BM25 recall
+query_tokens = ["fix", "login", "validation", "failure", "jwt", "token", "always", "expired"]
+# BM25 scores 847 nodes, top results:
+# - auth/jwt_validator.py : validate_token     (score: 18.4)
+# - auth/jwt_validator.py : check_expiry       (score: 15.1)
+# - auth/login.py         : authenticate_user  (score: 12.9)
+
+# Stage 2: Call graph expansion (2 hops from seed IDs)
+# validate_token → calls → check_expiry (already in set)
+# validate_token → calls → decode_jwt   (NEW — added by graph)
+# authenticate_user → calls → validate_token (already in set)
+# decode_jwt → calls → base64_decode    (NEW — added by graph)
+
+# Final result: 4 files, 6 functions — including decode_jwt
+# which contains the actual bug (wrong time unit comparison)
+```
+
+Without Stage 2, `decode_jwt` would never have been found by BM25 alone, because neither "decode" nor "base64" appears in the user's query.

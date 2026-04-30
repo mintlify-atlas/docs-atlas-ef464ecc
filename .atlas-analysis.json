@@ -1,0 +1,92 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "KWCode",
+  "projectDescription": "A local-model coding agent CLI optimized for small open-source LLMs (8B–30B), using a deterministic expert pipeline with BM25+AST code location, runtime debugging, DAG multi-task execution, and an auto-improving flywheel — all running fully offline.",
+  "theme": "luma",
+  "primaryColor": "#94cb04",
+  "lightColor": "#545454",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Usage Guide",
+            "pages": [
+              "usage/interactive-mode",
+              "usage/commands",
+              "usage/multi-task",
+              "usage/api-configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/expert-pipeline",
+              "concepts/code-location",
+              "concepts/debug-subagent",
+              "concepts/flywheel",
+              "concepts/memory-system"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/kwcode-md",
+              "configuration/model-setup",
+              "configuration/search-setup"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/adding-experts",
+              "contributing/development"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Deterministic 5-expert pipeline (Gate → Locator → Generator → Verifier → Debugger → Reviewer)",
+    "BM25 + AST call-graph two-stage code location (99.4% accuracy on hidden-dependency tasks)",
+    "Debug Subagent using sys.settrace for non-invasive runtime variable capture",
+    "DAG multi-task orchestration with parallel and serial dependency support",
+    "Auto-improving flywheel: trajectory collection → pattern detection → AB testing → SKILL.md optimization",
+    "Three-layer memory system: PROJECT.md, EXPERT.md, PATTERN.md + REFLECTION.md",
+    "Context compression for small-model (8K–32K) windows via algorithmic pruning",
+    "Model-capability auto-adaptation for <10B, 10–30B, and >30B models",
+    "Fully offline operation — code never leaves the local machine",
+    "15 built-in domain experts (FastAPI, BugFix, TestGen, SpringBoot, etc.)",
+    "Cross-Encoder search reranking and SearXNG self-hosted search integration",
+    "Windows-native support (cmd/PowerShell) with full Chinese localization"
+  ],
+  "publicApiSurface": [
+    "kwcode (interactive REPL)",
+    "kwcode \"<task>\" (single-shot execution)",
+    "kwcode --plan \"<task>\" (plan mode with risk assessment)",
+    "kwcode init (initialize KWCODE.md project rules)",
+    "kwcode memory (view project memory)",
+    "kwcode stats (view task statistics)",
+    "kwcode setup-search (install SearXNG via Docker)",
+    "/plan <task> (REPL: show steps + risk before executing)",
+    "/multi <task1> ; <task2> (REPL: parallel multi-task)",
+    "/multi <task1> -> <task2> (REPL: serial dependency chain)",
+    "/model <name> (REPL: switch model)",
+    "/api [temp|default|show] <url> <key> (REPL: configure API)",
+    "/experts (REPL: list registered experts)",
+    "/memory (REPL: show project memory)",
+    "/cd <path> (REPL: change project directory)",
+    "KWCODE.md project rules file (per-project configuration)"
+  ]
+}

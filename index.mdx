@@ -1,133 +1,88 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "KWCode: Local-model coding agent for small LLMs"
+description: "KWCode is a local CLI coding agent for small LLMs. Deterministic pipeline, BM25+AST location, runtime debugging, and self-improving flywheel — all offline."
 ---
 
-## Setting up
+KWCode is a local coding agent that works with small open-source models (Qwen3, DeepSeek, GLM) rather than requiring cloud-based LLMs. Instead of relying on a strong model's reasoning ability, KWCode uses a deterministic expert pipeline where each step has a fixed input/output format — so an 8B model only ever needs to do one clearly scoped task at a time.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install KWCode with pip and connect it to your local model or cloud API in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run your first coding task and see the expert pipeline in action.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Expert Pipeline" icon="diagram-project" href="/concepts/expert-pipeline">
+    Learn how Gate → Locator → Generator → Verifier → Debugger → Reviewer works.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Command Reference" icon="terminal" href="/usage/commands">
+    Full reference for every REPL command and CLI flag.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why KWCode?
 
-Everything you need to create world-class documentation.
+Existing coding agents (Claude Code, Cursor) are designed for powerful cloud LLMs. Local models struggle because they have small context windows, make repeated mistakes, and can't reliably call tools. KWCode solves these problems with a different architecture:
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Deterministic pipeline" icon="shield-check">
+    LLM only generates code — all decisions, validation, and retry logic are handled by deterministic code. No ReAct loops that go off the rails.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="BM25 + AST location" icon="magnifying-glass">
+    Two-stage code location finds the right files and functions without asking the LLM to guess. 99.4% accuracy on hidden-dependency tasks.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Runtime debugging" icon="bug">
+    Debug Subagent uses `sys.settrace` to capture real variable values at runtime and injects actual data into the next retry instead of guessing.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Self-improving flywheel" icon="arrows-rotate">
+    Every task is recorded. Successful patterns are promoted to domain experts after passing three quality gates: pattern detection, backtest, and AB test.
   </Card>
-</Columns>
+  <Card title="Fully offline" icon="lock">
+    Your code never leaves your machine. Models run locally, search runs on self-hosted SearXNG, and statistics are stored in local SQLite.
+  </Card>
+  <Card title="Multi-task DAG" icon="sitemap">
+    Run parallel and serial task chains with `/multi`. Dependency context flows automatically from upstream to downstream tasks.
+  </Card>
+</CardGroup>
 
-## Make your content agent ready
+## Get started
 
-Make your docs work for humans and AI agents alike.
+<Steps>
+  <Step title="Install KWCode">
+    ```bash
+    pip install kwcode
+    ```
+  </Step>
+  <Step title="Launch the interactive REPL">
+    ```bash
+    kwcode
+    ```
+    On first launch, KWCode guides you through connecting to a model (local Ollama, DeepSeek, or any OpenAI-compatible API).
+  </Step>
+  <Step title="Point it at your project">
+    ```
+    > /cd /path/to/your/project
+    > /init
+    ```
+    `/init` creates a `KWCODE.md` file where you define project-specific rules.
+  </Step>
+  <Step title="Run your first task">
+    ```
+    > fix the login validation bug in auth.py
+    ```
+    KWCode classifies the task, locates relevant code, generates a patch, verifies it with pytest, and reports back.
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
+## Supported models
 
-## Need inspiration?
+KWCode works with any OpenAI-compatible API. Recommended local models:
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+| VRAM | Recommended model |
+|------|-------------------|
+| 4 GB | gemma3:4b |
+| 8 GB | qwen3:8b |
+| 16 GB | qwen3:14b |
+| 24 GB+ | qwen3:30b-a3b |
+
+Cloud APIs (DeepSeek, Qwen, Silicon Flow, Groq, and others) work without any local GPU.

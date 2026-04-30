@@ -1,0 +1,194 @@
+---
+title: "How the KWCode deterministic expert pipeline works"
+description: "KWCode uses a fixed 6-stage pipeline — Gate, Locator, Generator, Verifier, Debugger, Reviewer — so small LLMs only generate code, never control flow."
+---
+
+KWCode was built around a core constraint: local open-source models (8B–30B parameters) cannot reliably self-direct through open-ended tool-use loops. When a small model runs a ReAct loop, it can lose track of its goal, repeat failed actions, and hallucinate file paths or function names. KWCode's answer is a **deterministic expert pipeline** — each stage has a fixed input schema, fixed output schema, and a single, narrow job. The LLM appears only at Gate (classification) and Generator (code production). Every other decision is made by deterministic code.
+
+## Pipeline overview
+
+Every task flows through the same six stages, in order:
+
+```text
+User input
+  └─► Gate          Task classification, routing, millisecond-level
+        └─► Locator     Precise file/function location (BM25 + call graph)
+              └─► Generator  Code generation (only modified parts)
+                    └─► Verifier   Syntax check + pytest auto-validation
+                          └─► Debugger   Runtime variable capture (sys.settrace)
+                                └─► Reviewer   Requirements alignment review
+```
+
+The pipeline sequence per task type is hardcoded in `kaiwu/core/orchestrator.py`:
+
+```python
+EXPERT_SEQUENCES = {
+    "locator_repair": ["locator", "generator", "verifier"],
+    "codegen":        ["generator", "verifier"],
+    "refactor":       ["locator", "generator", "verifier"],
+    "doc":            ["locator", "generator"],
+    "office":         ["office"],
+    "chat":           ["chat"],
+}
+```
+
+No LLM ever decides which stage runs next. The Orchestrator drives the sequence; experts only see their own input slice.
+
+## Gate
+
+The Gate is a single LLM call that classifies the user's input into a structured JSON result. It runs at the start of every task, in under 150 tokens of output.
+
+**Output schema:**
+
+```json
+{
+  "expert_type": "locator_repair",
+  "task_summary": "Fix login bug",
+  "difficulty": "easy",
+  "needs_search": false,
+  "subtask_hint": ""
+}
+```
+
+`expert_type` determines which pipeline sequence the Orchestrator selects. Valid values are `locator_repair`, `codegen`, `refactor`, `doc`, `office`, and `chat`.
+
+`difficulty` sets the retry budget: `easy` tasks get 2 retries, `hard` tasks get 4.
+
+`needs_search` triggers the SearchAugmentor on the first attempt rather than waiting for failure.
+
+`subtask_hint` is populated only for `hard` tasks where the Gate recommends splitting into subtasks.
+
+If grammar-constrained sampling is enabled (llama.cpp backend), the Gate output is forced to a valid JSON structure via GBNF grammar, making parse failures impossible.
+
+<Note>
+Level 1 SKILL.md content is loaded at the Gate stage. If the task matches a registered domain expert (e.g. FastAPI, SpringBoot), the expert's top-level instructions are attached as `system_prompt` and flow into all subsequent pipeline stages.
+</Note>
+
+## Locator
+
+The Locator identifies which files and functions need to change, without calling an LLM for the primary path. It uses a two-stage algorithm:
+
+1. **BM25 keyword recall** — tokenizes the query and scores all nodes in a pre-built SQLite call graph. Returns the top-20 candidates in milliseconds.
+2. **AST call graph expansion** — expands 2 hops in both directions along the call graph to surface hidden dependencies.
+
+The result is a list of `relevant_files` and `relevant_functions` passed to the Generator as grounding context. The LLM is only invoked as a fallback when the BM25+graph path returns no results.
+
+See [BM25 + AST call-graph code location](/concepts/code-location) for full details.
+
+## Generator
+
+The Generator reads the **original code directly from the file** — never from the LLM's memory — and asks the model to produce only the modified version. This guarantees that `apply_patch` has an exact string to replace.
+
+```python
+# Generator core contract (generator.py)
+# 1. Read original from file (100% accurate)
+original = self._extract_function(content, func_name)
+# 2. LLM only generates the modified version
+modified = self._generate_modified(ctx, fpath, original, ctx.user_input)
+# 3. Package as {file, original, modified} patch
+patches.append({"file": fpath, "original": original, "modified": modified})
+```
+
+The Generator caps modification scope: at most 3 files and 2 functions per file per attempt. This keeps the LLM's task small enough for 8B models to succeed.
+
+<Note>
+Level 2 SKILL.md content is injected at the Generator stage via `expert_system_prompt`. The model receives domain-specific rules (e.g. "FastAPI routes must use `include_router`") that are prepended to the base system prompt.
+</Note>
+
+On retry, the Generator uses a different prompt strategy based on `retry_strategy`:
+
+- `0` — Normal prompt: task description + original code
+- `1` — Error-first prompt: previous error + Reflection analysis + runtime debug data injected
+- `2` — Minimal-change prompt: only change the minimum necessary lines
+
+## Verifier
+
+The Verifier runs a fixed deterministic sequence after each Generator attempt:
+
+<Steps>
+  <Step title="Apply patch">
+    Exact-match replace `original` with `modified` in the target file. Backs up the original content first.
+  </Step>
+  <Step title="Syntax check">
+    Runs `python -m py_compile` on every modified `.py` file. If any file fails, rolls back and returns `passed: false`.
+  </Step>
+  <Step title="Run tests">
+    Discovers and runs the project test suite (`pytest tests/` or `python -m unittest discover`). If tests exist and any fail, rolls back and returns the full error output as `error_detail`.
+  </Step>
+</Steps>
+
+No LLM is involved. The Verifier's output — `passed`, `syntax_ok`, `tests_passed`, `tests_total`, `error_detail` — flows directly into the retry decision and the Debug Subagent.
+
+## Debug Subagent
+
+When the Verifier fails on the first attempt, the Debug Subagent captures real runtime variable values using `sys.settrace` — without modifying any source file, without PDB, and without an interactive session.
+
+The LLM decides which file, line, and variables to inspect. A trace script runs the test suite under `sys.settrace` and emits a JSON blob with actual variable values at the target line. That data is injected into the Generator's retry-1 prompt.
+
+See [Debug Subagent: runtime variable capture](/concepts/debug-subagent) for full details.
+
+## Reviewer
+
+After a successful Verifier pass, the Reviewer runs a non-blocking LLM alignment check. It compares:
+
+- The user's original intent (`user_input`)
+- The actual code changes (`generator_output.patches`)
+
+And returns `{"aligned": bool, "confidence": float, "gap": str}`.
+
+The Reviewer does **not** block task completion or trigger rollback. If it detects a gap (e.g. "user asked for JWT validation but the patch only adds logging"), the gap is surfaced as a warning to the user. This prevents silent partial completions.
+
+```python
+# reviewer.py — non-blocking by design
+def review(self, ctx: TaskContext) -> dict:
+    try:
+        ...
+        return self._parse_response(response)
+    except Exception as e:
+        # Optimistic fallback: treat as aligned if review fails
+        return {"aligned": True, "confidence": 0.0, "gap": ""}
+```
+
+## 15 built-in domain experts
+
+Domain knowledge is separated from the pipeline. The 5 meta-experts (Gate, Locator, Generator, Verifier, Reviewer) are fixed and do not change. Domain knowledge is loaded as SKILL.md files and injected at runtime.
+
+KWCode ships with 15 built-in domain experts in `kaiwu/builtin_experts/`:
+
+<CardGroup cols={3}>
+  <Card title="BugFix" />
+  <Card title="FastAPI" />
+  <Card title="TestGen" />
+  <Card title="API" />
+  <Card title="DeepSeekAPI" />
+  <Card title="Docstring" />
+  <Card title="MyBatis" />
+  <Card title="Office (Excel)" />
+  <Card title="Office (Word)" />
+  <Card title="Office (PPT)" />
+  <Card title="Refactor" />
+  <Card title="SpringBoot" />
+  <Card title="SQLOpt" />
+  <Card title="TypeHint" />
+  <Card title="UniApp" />
+</CardGroup>
+
+New domain experts can be added by creating a directory under `kaiwu/builtin_experts/` with a `SKILL.md` file. No changes to the pipeline are needed.
+
+## Three-stage retry logic
+
+The Orchestrator runs up to 4 retries for `hard` tasks (2 for `easy`). Each retry uses a progressively different strategy:
+
+<Steps>
+  <Step title="Attempt 1 — Normal">
+    Generator receives the task description + original code. Verifier validates. If it passes, done.
+  </Step>
+  <Step title="Attempt 2 — Reflection + runtime debug data">
+    Before retrying, the Orchestrator asks the LLM to analyze why the previous patch failed (Reflection). The Debug Subagent captures actual variable values via `sys.settrace`. Both the Reflection conclusion and the runtime debug data are injected into the Generator's prompt (`retry_strategy = 1`).
+  </Step>
+  <Step title="Attempt 3 — Minimal change">
+    The Generator prompt switches to minimal-change mode: "only change the minimum necessary lines, leave everything else untouched" (`retry_strategy = 2`). Previous failure context and debug data are still included.
+  </Step>
+</Steps>
+
+If all retries fail, the Orchestrator rolls back the file to its pre-task checkpoint state and emits a scope-narrowing suggestion (e.g. "try fixing only `validate_token()` instead of the whole auth module").

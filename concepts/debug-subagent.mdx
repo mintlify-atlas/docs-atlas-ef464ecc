@@ -1,0 +1,145 @@
+---
+title: "Debug Subagent: runtime variable capture"
+description: "KWCode's Debug Subagent uses sys.settrace to capture real runtime variable values and injects them into the next Generator retry — no PDB needed."
+---
+
+Small models repeat themselves. When a patch fails verification, a naive retry simply resubmits the same task description — and a small model with no new information will often produce the same broken patch again. This wastes all three retry attempts on the same mistake.
+
+The Debug Subagent breaks this cycle by collecting **real runtime data** before the second attempt. It captures the actual values of variables at the exact line where the test failed, then injects that data into the Generator's retry prompt. The model no longer has to guess what went wrong — it sees the actual state of the program at failure time.
+
+This design is based on the Debug2Fix paper (Microsoft, ICML 2026): "a weak model with access to an interactive debugger outperforms a strong model running without one."
+
+## How it works
+
+<Steps>
+  <Step title="Verifier fails">
+    The Verifier applies the patch, runs pytest, and captures the error output in `error_detail`. The Orchestrator increments `retry_count` and calls `debug_subagent.investigate(ctx)`.
+  </Step>
+  <Step title="LLM chooses what to inspect">
+    The Debug Subagent sends a single LLM call with the error message and the modified code snippet. The LLM returns a JSON strategy:
+
+    ```json
+    {
+      "file": "auth/jwt_validator.py",
+      "line": 42,
+      "variables": ["token", "expiry_ts", "current_ts"],
+      "error_type": "assertion"
+    }
+    ```
+  </Step>
+  <Step title="sys.settrace captures variable values">
+    A trace script is written to a temporary file and executed. It installs a `sys.settrace` handler that fires when execution reaches the target file and line number, capturing the requested variables:
+
+    ```python
+    def tracer(frame, event, arg):
+        if not fname.endswith(target_file):
+            return tracer
+        if event == "line" and frame.f_lineno == target_line:
+            captured["reached"] = True
+            for var in variables:
+                if var in frame.f_locals:
+                    captured["variables"][var] = repr(frame.f_locals[var])[:200]
+        return tracer
+
+    sys.settrace(tracer)
+    pytest.main([test_path, "-x", "-q", "--tb=no", "--no-header"])
+    sys.settrace(None)
+    ```
+  </Step>
+  <Step title="Debug data injected into retry">
+    The captured data is formatted into a human-readable string and stored in `ctx.debug_info`. The Generator's retry-1 prompt includes it:
+
+    ```
+    Runtime debug data:
+    Breakpoint hit: auth/jwt_validator.py:42
+    Variable values:
+      token = "eyJhbGci..."
+      expiry_ts = 1714377600
+      current_ts = 1714377600000   ← milliseconds vs seconds bug
+    ```
+  </Step>
+</Steps>
+
+## Non-invasive tracing
+
+`sys.settrace` is a Python standard library hook that fires a callback on every line execution, function call, and exception event. KWCode uses it without:
+
+- Modifying any source file
+- Injecting `import pdb` or breakpoint statements
+- Running an interactive PDB session
+- Requiring any new dependencies (it is part of the Python standard library)
+
+The trace script is written to a `tempfile`, executed as a subprocess with a 30-second timeout, and deleted immediately after. The target source files are never touched.
+
+```python
+# debug_subagent.py — temp file approach avoids shell escaping issues
+with tempfile.NamedTemporaryFile(
+    mode="w", suffix=".py", delete=False, encoding="utf-8"
+) as f:
+    f.write(script)
+    script_path = f.name
+
+result = self.tools.run_bash(f'python "{script_path}"', timeout=self.TIMEOUT)
+os.unlink(script_path)
+```
+
+## Fallback behavior
+
+When `sys.settrace` cannot reach the target line (e.g. the exception is raised before the trace fires, or the test exits immediately), the Debug Subagent falls back to `pytest --tb=long`:
+
+```python
+# debug_subagent.py
+def _fallback_detailed_traceback(self, ctx: TaskContext) -> str:
+    result = self.tools.run_bash(
+        f'python -m pytest "{test_path}" -x --tb=long -q 2>&1 | tail -40',
+        timeout=self.TIMEOUT,
+    )
+    if result and result.get("stdout"):
+        return f"[Detailed stack trace]\n{result['stdout'][:800]}"
+    return ""
+```
+
+The full stack trace is still more useful than the short `--tb=short` output that the Verifier captures by default. It gives the Generator the full exception chain and local variable snapshot from Python's native traceback.
+
+If both the trace and the fallback fail (e.g. the project has no test runner, or the timeout is exceeded), the Debug Subagent returns an empty string. The retry still proceeds — just without runtime data.
+
+## Three-stage retry flow
+
+The Debug Subagent is part of KWCode's three-stage retry strategy:
+
+<Steps>
+  <Step title="Attempt 1 — Normal generation">
+    Generator receives task description + original code. Verifier validates. If it fails, `retry_count` becomes 1.
+  </Step>
+  <Step title="Attempt 2 — Reflection + runtime debug data">
+    The Orchestrator calls `_do_reflection()` (LLM analyzes why the last patch failed, in one sentence) and `_do_debug()` (Debug Subagent captures runtime variables). Both outputs are injected into the Generator prompt:
+
+    ```python
+    # generator.py — retry_strategy=1 prompt
+    f"Last modification failed. Error:\n{error[:500]}"
+    f"\nFailure analysis: {ctx.reflection}"
+    f"\nRuntime debug data: {ctx.debug_info}"
+    f"\n\nOriginal code:\n```\n{original}\n```"
+    f"\nFix this error directly. Output only the complete modified function."
+    ```
+  </Step>
+  <Step title="Attempt 3 — Minimal change">
+    The Generator prompt switches to minimal-change mode. Previous failure context and debug data are still included. The model is instructed: "only change the minimum necessary lines, leave everything else untouched."
+  </Step>
+</Steps>
+
+## Example: captured debug output
+
+```text
+Breakpoint hit: auth/jwt_validator.py:42
+Variable values:
+  token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  expiry_ts = 1714377600
+  current_ts = 1714377600000
+```
+
+With this data, the Generator immediately identifies that `current_ts` is in milliseconds (`time.time() * 1000`) while `expiry_ts` is in seconds (stored as Unix timestamp). Without runtime capture, the model would have to guess this from the error message alone.
+
+<Info>
+The Debug Subagent implements the core finding of the Debug2Fix paper (Garg & Huang, Microsoft Research, ICML 2026): weak models equipped with a debugger consistently outperform stronger models running without one. On the GPT-5 + Debug2Fix configuration, the paper reports performance matching Claude Sonnet baseline.
+</Info>

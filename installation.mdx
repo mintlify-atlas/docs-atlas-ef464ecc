@@ -1,0 +1,86 @@
+---
+title: "Install KWCode: pip, developer, and Windows setup"
+description: "Install KWCode via pip on Windows, macOS, or Linux. Requires Python 3.10+ and any OpenAI-compatible API endpoint. No WSL2 needed on Windows."
+---
+
+KWCode installs as a standard Python package and runs natively on Windows (cmd/PowerShell), macOS, and Linux. The only hard requirement is Python 3.10 or later and access to an OpenAI-compatible API — either a locally running model server like Ollama or a cloud API like DeepSeek. Docker is optional and only needed if you want the self-hosted SearXNG search backend.
+
+## System requirements
+
+| Requirement | Details |
+|-------------|---------|
+| Python | 3.10, 3.11, or 3.12 |
+| API endpoint | Any OpenAI-compatible API (Ollama, llama.cpp, DeepSeek, Qwen, etc.) |
+| Docker | Optional — only required for self-hosted SearXNG search |
+
+## Install with pip
+
+<CodeGroup>
+
+```bash Standard
+pip install kwcode
+```
+
+```bash China mirror (recommended in China)
+pip install kwcode -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+```bash With Cross-Encoder reranking
+pip install kwcode[rerank]
+```
+
+</CodeGroup>
+
+The `[rerank]` extra installs `sentence-transformers` and enables Cross-Encoder reranking for search results. It is optional — KWCode works without it, using BM25 ranking by default.
+
+<Tip>
+  If you are in China or experiencing slow download speeds, use the Tsinghua mirror: `pip install kwcode -i https://pypi.tuna.tsinghua.edu.cn/simple`. The install script (`install.sh` / `install.ps1`) falls back to this mirror automatically if the default PyPI source fails.
+</Tip>
+
+## Developer install
+
+Clone the repository and install in editable mode to contribute or explore the source:
+
+```bash
+git clone https://github.com/val1813/kwcode.git
+cd kwcode
+pip install -e ".[dev]"
+```
+
+The `[dev]` extra includes `pytest` and all optional dependencies. Run the test suite to verify your environment:
+
+```bash
+python -m pytest kaiwu/tests/ -v --ignore=kaiwu/tests/bench_tasks
+```
+
+All 311 tests should pass.
+
+## Windows installation
+
+KWCode runs natively on Windows in cmd or PowerShell — no WSL2 required. The `install.ps1` script automates the installation with automatic fallback to the Tsinghua mirror:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+The script checks for Python 3.10+, attempts installation via `pipx` first (for an isolated environment), falls back to `pip`, and verifies the installation by running `kwcode status`.
+
+<Note>
+  When installing Python on Windows, make sure to check **Add Python to PATH** during setup, otherwise the `kwcode` command will not be available on the command line.
+</Note>
+
+## Verify installation
+
+After installation, confirm KWCode is working:
+
+```bash
+kwcode --version
+```
+
+Or launch the interactive REPL to run the first-time onboarding:
+
+```bash
+kwcode
+```
+
+On first launch, KWCode detects your network environment, prompts you for an API base URL and model name, verifies the connection, and saves the configuration to `~/.kwcode/config.yaml`.
